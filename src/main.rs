@@ -24,7 +24,27 @@ fn main() -> Result<(), Box<std::error::Error + 'static>> {
                         None
                     };
 
-                    ls.insert(key, Link::Partial { title });
+                    let link = Link::Partial { title };
+                    let previous = ls.insert(key, link);
+                    if let Some(old_link) = previous {
+                        match old_link {
+                            Link::Complete {
+                                text,
+                                title: Some(title_text),
+                            } => eprintln!(
+                                r#"DUPLICATE LINK -- [{}]: {} "{}""#,
+                                text, url, title_text
+                            ),
+                            Link::Complete { text, title: None } => {
+                                eprintln!("DUPLICATE LINK -- [{}]: {}", text, url)
+                            }
+                            Link::Partial {
+                                title: Some(title_text),
+                            } => eprintln!(r#"DUPLICATE LINK -- {} "{}""#, url, title_text),
+                            Link::Partial { title: None } => eprintln!("DUPLICATE LINK -- {}", url),
+                        }
+                    }
+
                     (Some(tracking_key), ls)
                 }
                 Event::Text(s) | Event::InlineHtml(s) => {
