@@ -1,15 +1,9 @@
 use pulldown_cmark::{Event, Parser, Tag};
 
+#[derive(PartialEq, Eq, Hash)]
 enum Link {
-    Partial {
-        url: String,
-        title: Option<String>,
-    },
-    Complete {
-        url: String,
-        title: Option<String>,
-        text: String,
-    },
+    Partial { title: Option<String> },
+    Complete { title: Option<String>, text: String },
 }
 
 fn main() -> Result<(), Box<std::error::Error + 'static>> {
@@ -18,10 +12,11 @@ fn main() -> Result<(), Box<std::error::Error + 'static>> {
     let contents = std::fs::read_to_string(&path)?;
     Parser::new(&contents)
         .fold(
-            (false, vec![]),
-            |(in_link, mut ls): (bool, Vec<Link>), event| match event {
+            (None, std::collections::HashMap::<String, Link>::new()),
+            |(current, mut ls), event| match event {
                 Event::Start(Tag::Link(url, title)) => {
-                    let url: String = url.into();
+                    let key = url.to_string();
+                    let tracking_key = url.to_string();
 
                     let title = if title.len() > 0 {
                         Some(title.into())
@@ -29,55 +24,49 @@ fn main() -> Result<(), Box<std::error::Error + 'static>> {
                         None
                     };
 
-                    ls.push(Link::Partial { url, title });
-                    (true, ls)
+                    ls.insert(key, Link::Partial { title });
+                    (Some(tracking_key), ls)
                 }
                 Event::Text(s) | Event::InlineHtml(s) => {
                     let new_text = String::from(s);
-                    if in_link {
-                        let link = match ls.pop().expect(
+                    if let Some(url) = current {
+                        let key: String = url.to_string();
+                        let tracking_key = url.to_string();
+
+                        let link = match ls.get(&key).expect(
                             "We should not be able to `pop` without a previously-set `vec` element",
                         ) {
-                            Link::Partial { url, title } => Link::Complete {
-                                url,
-                                title,
+                            Link::Partial { title } => Link::Complete {
+                                title: title.to_owned(),
                                 text: new_text,
                             },
-                            Link::Complete { url, title, text } => Link::Complete {
-                                url,
-                                title,
-                                text: text + &new_text,
+                            Link::Complete { title, text } => Link::Complete {
+                                title: title.to_owned(),
+                                text: text.to_owned() + &new_text,
                             },
                         };
 
-                        ls.push(link);
-
-                        (true, ls)
+                        ls.insert(key, link);
+                        (Some(tracking_key), ls)
                     } else {
-                        (false, ls)
+                        (None, ls)
                     }
                 }
-                _ => (false, ls),
+                _ => (None, ls),
             },
         )
         .1
         .iter()
-        .for_each(|link| match link {
+        .for_each(|(url, link)| match link {
             Link::Complete {
-                url,
                 text,
                 title: Some(title_text),
             } => println!(r#"[{}]: {} "{}""#, text, url, title_text),
-            Link::Complete {
-                url,
-                text,
-                title: None,
-            } => println!("[{}]: {}", text, url),
+            Link::Complete { text, title: None } => println!("[{}]: {}", text, url),
             Link::Partial {
-                url,
                 title: Some(title_text),
             } => eprintln!(r#"BAD LINK: {} "{}""#, url, title_text),
-            Link::Partial { url, title: None } => eprintln!("BAD LINK: {}", url),
+            Link::Partial { title: None } => eprintln!("BAD LINK: {}", url),
         });
 
     Ok(())
