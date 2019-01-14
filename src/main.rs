@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<std::error::Error + 'static>> {
     print!("\n");
 
     links.iter().for_each(|(_, link)| match link {
-        Link::Complete { text, .. } => println!("- {}", text),
+        Link::Complete { text, .. } => println!("- [{}]", text),
         _ => {}
     });
 
