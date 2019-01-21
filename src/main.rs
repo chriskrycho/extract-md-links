@@ -84,7 +84,7 @@ fn insert_or_update_link(
     url: &std::borrow::Cow<str>,
     title: &std::borrow::Cow<str>,
     links: &mut HashMap<String, Link>,
-) {
+) -> Result<(), String> {
     let key = url.to_string();
 
     let title = if title.len() > 0 {
@@ -103,24 +103,24 @@ fn insert_or_update_link(
             | Link::Complete {
                 title: Some(current_title),
                 ..
-            } => {
-                panic!(
-                    "ERROR: attempted to build same link with different titles: {:#?} and {:#?}",
-                    current_title,
-                    title.unwrap()
-                );
-            }
-            Link::Partial { title: None } => Link::Partial { title },
-            Link::Complete { title: None, text } => Link::Complete {
+            } => Err(format!(
+                "ERROR: attempted to build same link with different titles: {:#?} and {:#?}",
+                current_title,
+                title.unwrap()
+            )),
+            Link::Partial { title: None } => Ok(Link::Partial { title }),
+            Link::Complete { title: None, text } => Ok(Link::Complete {
                 title,
                 text: text.as_str().into(),
-            },
+            }),
         }
     } else {
-        Link::Partial { title }
-    };
+        Ok(Link::Partial { title })
+    }?;
 
     links.insert(key, link);
+
+    Ok(())
 }
 
 fn update_link_text(
