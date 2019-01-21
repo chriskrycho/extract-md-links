@@ -13,6 +13,17 @@ fn main() -> Result<(), Box<std::error::Error + 'static>> {
     let mut args = std::env::args();
     let path = args.nth(1).expect("No argument supplied!");
     let contents = std::fs::read_to_string(&path)?;
+    let links = links_from_document(&contents)?;
+
+    println!("");
+
+    print_links(&links);
+    print_errs(&links);
+
+    Ok(())
+}
+
+fn links_from_document(contents: &str) -> Result<HashMap<String, Link>, String> {
     let (current, links) = Parser::new(&contents).fold(
         (None, HashMap::<String, Link>::new()),
         |(current, mut links), event| match event {
@@ -29,16 +40,10 @@ fn main() -> Result<(), Box<std::error::Error + 'static>> {
         },
     );
 
-    if current.is_some() {
-        panic!("ERROR -- un-closed link: {:#?}", current);
+    match current {
+        Some(url) => Err(format!("ERROR -- un-closed link: {:#?}", url)),
+        None => Ok(links),
     }
-
-    println!("");
-
-    print_links(&links);
-    print_errs(&links);
-
-    Ok(())
 }
 
 fn print_links(links: &HashMap<String, Link>) {
