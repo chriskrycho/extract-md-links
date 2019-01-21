@@ -1,6 +1,9 @@
+use std::borrow::Cow;
+use std::collections::HashMap;
+
 use pulldown_cmark::{Event, Parser, Tag};
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 enum Link {
     Partial { title: Option<String> },
     Complete { title: Option<String>, text: String },
@@ -10,81 +13,42 @@ fn main() -> Result<(), Box<std::error::Error + 'static>> {
     let mut args = std::env::args();
     let path = args.nth(1).expect("No argument supplied!");
     let contents = std::fs::read_to_string(&path)?;
-    let links = Parser::new(&contents)
-        .fold(
-            (None, std::collections::HashMap::<String, Link>::new()),
-            |(current, mut ls), event| match event {
-                Event::Start(Tag::Link(url, title)) => {
-                    let key = url.to_string();
-                    let tracking_key = url.to_string();
+    let (current, links) = Parser::new(&contents).fold(
+        (None, HashMap::<String, Link>::new()),
+        |(current, mut links), event| match event {
+            Event::Start(Tag::Link(url, title)) => {
+                insert_or_update_link(&url, &title, &mut links);
+                (Some(url.to_string()), links)
+            }
+            Event::Text(s) | Event::InlineHtml(s) | Event::Html(s) => {
+                let tracking = update_link_text(&s, &current, &mut links);
+                (tracking, links)
+            }
+            Event::End(Tag::Link(_, _)) => (None, links),
+            _ => (current, links),
+        },
+    );
 
-                    let title = if title.len() > 0 {
-                        Some(title.into())
-                    } else {
-                        None
-                    };
+    if current.is_some() {
+        panic!("ERROR -- un-closed link: {:#?}", current);
+    }
 
-                    let link = Link::Partial { title };
-                    let previous = ls.insert(key, link);
-                    if let Some(old_link) = previous {
-                        match old_link {
-                            Link::Complete {
-                                text,
-                                title: Some(title_text),
-                            } => eprintln!(
-                                r#"DUPLICATE LINK -- [{}]: {} "{}""#,
-                                text, url, title_text
-                            ),
-                            Link::Complete { text, title: None } => {
-                                eprintln!("DUPLICATE LINK -- [{}]: {}", text, url)
-                            }
-                            Link::Partial {
-                                title: Some(title_text),
-                            } => eprintln!(r#"DUPLICATE LINK -- {} "{}""#, url, title_text),
-                            Link::Partial { title: None } => eprintln!("DUPLICATE LINK -- {}", url),
-                        }
-                    }
+    println!("");
 
-                    (Some(tracking_key), ls)
-                }
-                Event::Text(s) | Event::InlineHtml(s) => {
-                    let new_text = String::from(s);
-                    if let Some(url) = current {
-                        let key: String = url.to_string();
-                        let tracking_key = url.to_string();
+    print_links(&links);
+    print_errs(&links);
 
-                        let link = match ls.get(&key).expect(
-                            "We should not be able to `pop` without a previously-set `vec` element",
-                        ) {
-                            Link::Partial { title } => Link::Complete {
-                                title: title.to_owned(),
-                                text: new_text,
-                            },
-                            Link::Complete { title, text } => Link::Complete {
-                                title: title.to_owned(),
-                                text: text.to_owned() + &new_text,
-                            },
-                        };
+    Ok(())
+}
 
-                        ls.insert(key, link);
-                        (Some(tracking_key), ls)
-                    } else {
-                        (None, ls)
-                    }
-                }
-                _ => (None, ls),
-            },
-        )
-        .1;
-
-    print!("\n");
-
+fn print_links(links: &HashMap<String, Link>) {
     links.iter().for_each(|(_, link)| match link {
         Link::Complete { text, .. } => println!("- [{}]", text),
         _ => {}
     });
 
-    print!("\n");
+    println!("");
+
     links.iter().for_each(|(url, link)| match link {
         Link::Complete {
             text,
@@ -93,12 +57,14 @@ fn main() -> Result<(), Box<std::error::Error + 'static>> {
         Link::Complete { text, title: None } => println!("[{}]: {}", text, url),
         _ => {}
     });
+}
 
+fn print_errs(links: &HashMap<String, Link>) {
     if links.iter().any(|(_, link)| match link {
         Link::Partial { .. } => true,
         _ => false,
     }) {
-        eprint!("\nErrors:");
+        eprintln!("\nErrors:");
         links.iter().for_each(|(url, link)| match link {
             Link::Partial {
                 title: Some(title_text),
@@ -107,6 +73,76 @@ fn main() -> Result<(), Box<std::error::Error + 'static>> {
             _ => {}
         });
     }
+}
 
-    Ok(())
+fn insert_or_update_link(
+    url: &std::borrow::Cow<str>,
+    title: &std::borrow::Cow<str>,
+    links: &mut HashMap<String, Link>,
+) {
+    let key = url.to_string();
+
+    let title = if title.len() > 0 {
+        Some(title.as_ref().to_owned())
+    } else {
+        None
+    };
+
+    // If the key exists already, we can update it if we have a non-`None`
+    // `title`; otherwise, we can simply use whatever we have.
+    let link = if links.contains_key(&key) && title.is_some() {
+        match &links[&key] {
+            Link::Partial {
+                title: Some(current_title),
+            }
+            | Link::Complete {
+                title: Some(current_title),
+                ..
+            } => {
+                panic!(
+                    "ERROR: attempted to build same link with different titles: {:#?} and {:#?}",
+                    current_title,
+                    title.unwrap()
+                );
+            }
+            Link::Partial { title: None } => Link::Partial { title },
+            Link::Complete { title: None, text } => Link::Complete {
+                title,
+                text: text.as_str().into(),
+            },
+        }
+    } else {
+        Link::Partial { title }
+    };
+
+    links.insert(key, link);
+}
+
+fn update_link_text(
+    new_text: &Cow<str>,
+    current: &Option<String>,
+    links: &mut HashMap<String, Link>,
+) -> Option<String> {
+    let new_text = new_text.as_ref().to_owned();
+    if let Some(url) = current {
+        let key: String = url.to_string();
+        let tracking_key = url.to_string();
+
+        // Lookup is safe: we just checked that the key is set.
+        let link = match &links[&key] {
+            Link::Partial { title } => Link::Complete {
+                title: title.to_owned(),
+                text: new_text,
+            },
+            Link::Complete { title, text } => Link::Complete {
+                title: title.to_owned(),
+                text: text.to_owned() + &new_text,
+            },
+        };
+
+        links.insert(key, link);
+        Some(tracking_key)
+    } else {
+        None
+    }
 }
