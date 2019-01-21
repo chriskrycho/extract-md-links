@@ -9,6 +9,8 @@ enum Link {
     Complete { title: Option<String>, text: String },
 }
 
+type Links = HashMap<String, Link>;
+
 fn main() -> Result<(), Box<std::error::Error + 'static>> {
     let mut args = std::env::args();
     let path = args.nth(1).expect("No argument supplied!");
@@ -23,22 +25,20 @@ fn main() -> Result<(), Box<std::error::Error + 'static>> {
     Ok(())
 }
 
-fn links_from_document(contents: &str) -> Result<HashMap<String, Link>, String> {
-    let (current, links) = Parser::new(&contents).fold(
+fn links_from_document(contents: &str) -> Result<Links, String> {
+    let (current, links) = Parser::new(&contents).try_fold(
         (None, HashMap::<String, Link>::new()),
         |(current, mut links), event| match event {
-            Event::Start(Tag::Link(url, title)) => {
-                insert_or_update_link(&url, &title, &mut links);
-                (Some(url.to_string()), links)
-            }
+            Event::Start(Tag::Link(url, title)) => insert_or_update_link(&url, &title, &mut links)
+                .and(Ok((Some(url.to_string()), links))),
             Event::Text(s) | Event::InlineHtml(s) | Event::Html(s) => {
                 let tracking = update_link_text(&s, &current, &mut links);
-                (tracking, links)
+                Ok((tracking, links))
             }
-            Event::End(Tag::Link(_, _)) => (None, links),
-            _ => (current, links),
+            Event::End(Tag::Link(_, _)) => Ok((None, links)),
+            _ => Ok((current, links)),
         },
-    );
+    )?;
 
     match current {
         Some(url) => Err(format!("ERROR -- un-closed link: {:#?}", url)),
@@ -46,7 +46,7 @@ fn links_from_document(contents: &str) -> Result<HashMap<String, Link>, String> 
     }
 }
 
-fn print_links(links: &HashMap<String, Link>) {
+fn print_links(links: &Links) {
     links.iter().for_each(|(_, link)| match link {
         Link::Complete { text, .. } => println!("- [{}]", text),
         _ => {}
@@ -64,7 +64,7 @@ fn print_links(links: &HashMap<String, Link>) {
     });
 }
 
-fn print_errs(links: &HashMap<String, Link>) {
+fn print_errs(links: &Links) {
     if links.iter().any(|(_, link)| match link {
         Link::Partial { .. } => true,
         _ => false,
@@ -83,7 +83,7 @@ fn print_errs(links: &HashMap<String, Link>) {
 fn insert_or_update_link(
     url: &std::borrow::Cow<str>,
     title: &std::borrow::Cow<str>,
-    links: &mut HashMap<String, Link>,
+    links: &mut Links,
 ) -> Result<(), String> {
     let key = url.to_string();
 
@@ -126,7 +126,7 @@ fn insert_or_update_link(
 fn update_link_text(
     new_text: &Cow<str>,
     current: &Option<String>,
-    links: &mut HashMap<String, Link>,
+    links: &mut Links,
 ) -> Option<String> {
     let new_text = new_text.as_ref().to_owned();
     if let Some(url) = current {
